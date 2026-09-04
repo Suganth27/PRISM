@@ -1,16 +1,23 @@
 import numpy as np
 
 
+# Semantic class IDs
+GROUND = 0
+STATIC_OBSTACLE = 1
+DYNAMIC_OBJECT = 2
+
+
 class Adaptive2_5DMapper:
 
     def __init__(self):
 
         # Distance bands in metres.
         #
-        # 0-10 m   -> 5 cm
-        # 10-30 m  -> 10 cm
-        # 30-60 m  -> 25 cm
-        # 60-100 m -> 50 cm
+        # 0-10 m    -> 5 cm
+        # 10-30 m   -> 10 cm
+        # 30-60 m   -> 25 cm
+        # 60-100 m  -> 50 cm
+
         self.distance_bands = [
             (10.0, 0.05),
             (30.0, 0.10),
@@ -33,59 +40,54 @@ class Adaptive2_5DMapper:
             if distance <= max_distance:
                 return resolution
 
-        # Outside mapping range
         return None
 
-    def map_points(self, points, labels=None):
+    def map_points(
+        self,
+        points,
+        labels=None
+    ):
         """
         Convert a 3D LiDAR point cloud into an
-        adaptive-resolution 2.5D semantic map.
+        adaptive-resolution 2.5D map.
+
+        Parameters
+        ----------
+        points : numpy.ndarray
+            Nx3 array containing x, y, z.
+
+        labels : numpy.ndarray or None
+            N semantic labels corresponding to
+            the input points.
+
+            0 = Ground
+            1 = Static obstacle
+            2 = Dynamic object
 
         Each cell stores:
 
-        Spatial information:
-            - resolution
-            - x_min
-            - x_max
-            - y_min
-            - y_max
-
-        Height information:
-            - height_min
-            - height_max
-            - height_mean
-
-        Point information:
-            - point_count
-
-        Semantic information:
-            - class_counts
-            - dominant_class
+        - spatial bounds
+        - resolution
+        - height_min
+        - height_max
+        - height_mean
+        - point_count
+        - class_counts
+        - dominant_class
         """
+
+        if labels is not None:
+
+            if len(labels) != len(points):
+
+                raise ValueError(
+                    "Number of labels must match "
+                    "number of LiDAR points."
+                )
 
         cells = {}
 
-        # If labels are not supplied, treat every
-        # point as an unknown semantic class.
-        if labels is None:
-
-            labels = np.full(
-                len(points),
-                -1,
-                dtype=np.int32
-            )
-
-        if len(points) != len(labels):
-
-            raise ValueError(
-                "Number of points and labels "
-                "must be the same."
-            )
-
-        for point, label in zip(
-            points,
-            labels
-        ):
+        for index, point in enumerate(points):
 
             x, y, z = point
 
@@ -94,8 +96,8 @@ class Adaptive2_5DMapper:
                 y
             )
 
-            # Ignore points outside
-            # the mapping range.
+            # Ignore points outside the
+            # 100 metre mapping range.
             if resolution is None:
                 continue
 
@@ -119,9 +121,23 @@ class Adaptive2_5DMapper:
                 cell_y
             )
 
+            # Get semantic label.
+            if labels is not None:
+
+                semantic_class = int(
+                    labels[index]
+                )
+
+            else:
+
+                semantic_class = GROUND
+
+            # ----------------------------------------
+            # Create new cell
+            # ----------------------------------------
+
             if key not in cells:
 
-                # Spatial boundaries
                 x_min = (
                     cell_x *
                     resolution
@@ -159,17 +175,19 @@ class Adaptive2_5DMapper:
                     "point_count": 1,
 
                     "class_counts": {
-                        int(label): 1
+                        GROUND: 0,
+                        STATIC_OBSTACLE: 0,
+                        DYNAMIC_OBJECT: 0
                     }
                 }
+
+            # ----------------------------------------
+            # Update existing cell
+            # ----------------------------------------
 
             else:
 
                 cell = cells[key]
-
-                # ----------------------------
-                # Height statistics
-                # ----------------------------
 
                 cell["height_min"] = min(
                     cell["height_min"],
@@ -185,20 +203,16 @@ class Adaptive2_5DMapper:
 
                 cell["point_count"] += 1
 
-                # ----------------------------
-                # Semantic statistics
-                # ----------------------------
+            # Record semantic class.
+            if semantic_class in (
+                GROUND,
+                STATIC_OBSTACLE,
+                DYNAMIC_OBJECT
+            ):
 
-                class_id = int(label)
-
-                cell["class_counts"][
-                    class_id
-                ] = (
-                    cell["class_counts"].get(
-                        class_id,
-                        0
-                    ) + 1
-                )
+                cells[key]["class_counts"][
+                    semantic_class
+                ] += 1
 
         # ----------------------------------------
         # Finalize cells
@@ -206,7 +220,7 @@ class Adaptive2_5DMapper:
 
         for cell in cells.values():
 
-            # Mean height
+            # Mean elevation
             cell["height_mean"] = (
                 cell["height_sum"] /
                 cell["point_count"]
@@ -214,10 +228,12 @@ class Adaptive2_5DMapper:
 
             del cell["height_sum"]
 
-            # Dominant semantic class
+            # Determine dominant semantic class
+            class_counts = cell["class_counts"]
+
             cell["dominant_class"] = max(
-                cell["class_counts"],
-                key=cell["class_counts"].get
+                class_counts,
+                key=class_counts.get
             )
 
         return cells
