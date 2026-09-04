@@ -1,25 +1,22 @@
+import os
+
 import matplotlib.pyplot as plt
+from matplotlib.collections import PatchCollection
 from matplotlib.patches import Rectangle
 from matplotlib.colors import Normalize
-import matplotlib.cm as cm
 
 
-def show_adaptive_map(cells):
-    """
-    Visualize the adaptive 2.5D map.
+OUTPUT_DIR = "output"
 
-    Each rectangle represents one adaptive cell.
-    Rectangle size = spatial resolution.
-    Rectangle color = mean elevation.
-    """
 
-    if not cells:
-        print("No adaptive cells to visualize.")
-        return
+def _prepare_output_directory():
+    """Create the output directory if it does not exist."""
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-    fig, ax = plt.subplots(figsize=(11, 9))
 
-    # Find height range
+def _get_height_normalization(cells):
+    """Create a common height normalization for a map."""
+
     heights = [
         cell["height_mean"]
         for cell in cells.values()
@@ -28,75 +25,89 @@ def show_adaptive_map(cells):
     min_height = min(heights)
     max_height = max(heights)
 
-    # Avoid zero-width normalization
     if min_height == max_height:
         max_height = min_height + 1.0
 
-    norm = Normalize(
+    return Normalize(
         vmin=min_height,
         vmax=max_height
     )
 
-    colormap = cm.viridis
 
-    # Draw every adaptive cell
-    for (resolution, cell_x, cell_y), cell in cells.items():
+def _build_patches(cells, resolution=None, adaptive=False):
+    """
+    Build map cell rectangles efficiently.
 
-        # Convert grid index back into world coordinates
-        x = cell_x * resolution
-        y = cell_y * resolution
+    Uniform map:
+        Cell key = (cell_x, cell_y)
+        Resolution comes from the function argument.
 
-        rectangle = Rectangle(
-            (x, y),
-            resolution,
-            resolution,
-            facecolor=colormap(
-                norm(cell["height_mean"])
-            ),
-            edgecolor="black",
-            linewidth=0.15
+    Adaptive map:
+        Cell key = (resolution, cell_x, cell_y)
+        Resolution comes from the cell key.
+    """
+
+    patches = []
+    values = []
+
+    for key, cell in cells.items():
+
+        if adaptive:
+
+            cell_resolution, cell_x, cell_y = key
+
+        else:
+
+            cell_x, cell_y = key
+            cell_resolution = resolution
+
+        x = cell_x * cell_resolution
+        y = cell_y * cell_resolution
+
+        patches.append(
+            Rectangle(
+                (x, y),
+                cell_resolution,
+                cell_resolution
+            )
         )
 
-        ax.add_patch(rectangle)
+        values.append(
+            cell["height_mean"]
+        )
 
-    # --------------------------------------------------
-    # Draw LiDAR position
-    # --------------------------------------------------
+    return patches, values
 
-    ax.scatter(
-        0,
-        0,
-        marker="x",
-        s=100,
-        linewidths=3,
-        label="LiDAR"
-    )
 
-    # --------------------------------------------------
-    # Formatting
-    # --------------------------------------------------
+def _set_map_limits(ax, cells, resolution=None, adaptive=False):
+    """Set plot limits based on map cell boundaries."""
 
-    ax.set_title(
-        "PRISM - Adaptive 2.5D LiDAR Map",
-        fontsize=16
-    )
-
-    ax.set_xlabel("X position (m)")
-    ax.set_ylabel("Y position (m)")
-
-    ax.set_aspect("equal")
-
-    # Automatically determine limits
     all_x = []
     all_y = []
 
-    for resolution, cell_x, cell_y in cells.keys():
+    for key, cell in cells.items():
 
-        all_x.append(cell_x * resolution)
-        all_x.append((cell_x + 1) * resolution)
+        if adaptive:
 
-        all_y.append(cell_y * resolution)
-        all_y.append((cell_y + 1) * resolution)
+            cell_resolution, cell_x, cell_y = key
+
+        else:
+
+            cell_x, cell_y = key
+            cell_resolution = resolution
+
+        x = cell_x * cell_resolution
+        y = cell_y * cell_resolution
+
+        all_x.extend([
+            x,
+            x + cell_resolution
+        ])
+
+        all_y.extend([
+            y,
+            y + cell_resolution
+        ])
 
     margin = 1.0
 
@@ -110,19 +121,82 @@ def show_adaptive_map(cells):
         max(all_y) + margin
     )
 
-    # --------------------------------------------------
-    # Color bar
-    # --------------------------------------------------
 
-    scalar_map = cm.ScalarMappable(
-        norm=norm,
-        cmap=colormap
+def show_uniform_map(cells, resolution=0.5):
+    """
+    Visualize the uniform 2.5D map efficiently.
+    """
+
+    if not cells:
+        print("No uniform cells to visualize.")
+        return None
+
+    _prepare_output_directory()
+
+    fig, ax = plt.subplots(
+        figsize=(11, 9)
     )
 
-    scalar_map.set_array([])
+    norm = _get_height_normalization(
+        cells
+    )
+
+    patches, values = _build_patches(
+        cells,
+        resolution=resolution,
+        adaptive=False
+    )
+
+    collection = PatchCollection(
+        patches,
+        cmap="viridis",
+        norm=norm,
+        edgecolor="none"
+    )
+
+    collection.set_array(values)
+
+    ax.add_collection(
+        collection
+    )
+
+    # LiDAR origin
+    ax.scatter(
+        0,
+        0,
+        marker="x",
+        s=100,
+        linewidths=3,
+        label="LiDAR"
+    )
+
+    ax.set_title(
+        f"PRISM - Uniform 2.5D Map "
+        f"({resolution * 100:.0f} cm)",
+        fontsize=16
+    )
+
+    ax.set_xlabel(
+        "X position (m)"
+    )
+
+    ax.set_ylabel(
+        "Y position (m)"
+    )
+
+    ax.set_aspect(
+        "equal"
+    )
+
+    _set_map_limits(
+        ax,
+        cells,
+        resolution=resolution,
+        adaptive=False
+    )
 
     colorbar = fig.colorbar(
-        scalar_map,
+        collection,
         ax=ax
     )
 
@@ -130,8 +204,191 @@ def show_adaptive_map(cells):
         "Mean Height (m)"
     )
 
-    ax.legend()
+    ax.legend(
+        loc="upper right"
+    )
 
     plt.tight_layout()
+
+    output_path = os.path.join(
+        OUTPUT_DIR,
+        "uniform_2_5d.png"
+    )
+
+    fig.savefig(
+        output_path,
+        dpi=150,
+        bbox_inches="tight"
+    )
+
+    print(
+        f"Saved uniform map     : {output_path}"
+    )
+
+    return fig
+
+
+def show_adaptive_map(cells):
+    """
+    Visualize the adaptive 2.5D map efficiently.
+
+    Cell size represents spatial resolution.
+    Color represents mean elevation.
+    """
+
+    if not cells:
+        print("No adaptive cells to visualize.")
+        return None
+
+    _prepare_output_directory()
+
+    fig, ax = plt.subplots(
+        figsize=(11, 9)
+    )
+
+    norm = _get_height_normalization(
+        cells
+    )
+
+    patches, values = _build_patches(
+        cells,
+        adaptive=True
+    )
+
+    collection = PatchCollection(
+        patches,
+        cmap="viridis",
+        norm=norm,
+        edgecolor="none"
+    )
+
+    collection.set_array(values)
+
+    ax.add_collection(
+        collection
+    )
+
+    # LiDAR origin
+    ax.scatter(
+        0,
+        0,
+        marker="x",
+        s=100,
+        linewidths=3,
+        label="LiDAR"
+    )
+
+    ax.set_title(
+        "PRISM - Adaptive 2.5D LiDAR Map",
+        fontsize=16
+    )
+
+    ax.set_xlabel(
+        "X position (m)"
+    )
+
+    ax.set_ylabel(
+        "Y position (m)"
+    )
+
+    ax.set_aspect(
+        "equal"
+    )
+
+    _set_map_limits(
+        ax,
+        cells,
+        adaptive=True
+    )
+
+    colorbar = fig.colorbar(
+        collection,
+        ax=ax
+    )
+
+    colorbar.set_label(
+        "Mean Height (m)"
+    )
+
+    ax.legend(
+        loc="upper right"
+    )
+
+    # ----------------------------------------
+    # Resolution statistics
+    # ----------------------------------------
+
+    resolution_counts = {}
+
+    for key in cells:
+
+        resolution = key[0]
+
+        resolution_counts[resolution] = (
+            resolution_counts.get(
+                resolution,
+                0
+            ) + 1
+        )
+
+    resolution_text = "\n".join(
+        f"{int(resolution * 100)} cm : "
+        f"{count:,} cells"
+        for resolution, count
+        in sorted(
+            resolution_counts.items()
+        )
+    )
+
+    ax.text(
+        0.02,
+        0.98,
+        resolution_text,
+        transform=ax.transAxes,
+        verticalalignment="top",
+        bbox=dict(
+            boxstyle="round",
+            facecolor="white",
+            alpha=0.85
+        )
+    )
+
+    plt.tight_layout()
+
+    output_path = os.path.join(
+        OUTPUT_DIR,
+        "adaptive_2_5d.png"
+    )
+
+    fig.savefig(
+        output_path,
+        dpi=150,
+        bbox_inches="tight"
+    )
+
+    print(
+        f"Saved adaptive map    : {output_path}"
+    )
+
+    return fig
+
+
+def show_maps_together(
+    uniform_cells,
+    adaptive_cells,
+    resolution=0.5
+):
+    """
+    Display uniform and adaptive maps together.
+    """
+
+    show_uniform_map(
+        uniform_cells,
+        resolution
+    )
+
+    show_adaptive_map(
+        adaptive_cells
+    )
 
     plt.show()

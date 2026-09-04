@@ -2,20 +2,46 @@ import numpy as np
 
 
 class SyntheticLiDAR:
+
+    # Semantic class IDs
+    GROUND = 0
+    STATIC_OBSTACLE = 1
+    DYNAMIC_OBJECT = 2
+
     def __init__(self, seed=42):
         self.rng = np.random.default_rng(seed)
 
-    def generate_ground(self, x_range=(-20, 20), y_range=(-20, 20),
-                        spacing=0.25):
+    def generate_ground(
+        self,
+        x_range=(-100, 100),
+        y_range=(-100, 100),
+        spacing=0.5
+    ):
         """Generate flat road/ground points."""
 
-        x = np.arange(x_range[0], x_range[1], spacing)
-        y = np.arange(y_range[0], y_range[1], spacing)
+        x = np.arange(
+            x_range[0],
+            x_range[1],
+            spacing
+        )
 
-        xx, yy = np.meshgrid(x, y)
+        y = np.arange(
+            y_range[0],
+            y_range[1],
+            spacing
+        )
 
-        # Small measurement noise
-        zz = self.rng.normal(0, 0.01, xx.shape)
+        xx, yy = np.meshgrid(
+            x,
+            y
+        )
+
+        # Small LiDAR measurement noise
+        zz = self.rng.normal(
+            0,
+            0.01,
+            xx.shape
+        )
 
         points = np.column_stack((
             xx.ravel(),
@@ -23,45 +49,86 @@ class SyntheticLiDAR:
             zz.ravel()
         ))
 
-        return points
+        labels = np.full(
+            len(points),
+            self.GROUND,
+            dtype=np.int32
+        )
 
-    def generate_box(self, center, size, spacing=0.15):
+        return points, labels
+
+    def generate_box(
+        self,
+        center,
+        size,
+        spacing=0.15
+    ):
         """Generate points representing a box-shaped obstacle."""
 
         cx, cy, cz = center
         sx, sy, sz = size
 
-        x = np.arange(cx - sx / 2, cx + sx / 2, spacing)
-        y = np.arange(cy - sy / 2, cy + sy / 2, spacing)
-        z = np.arange(cz, cz + sz, spacing)
+        x = np.arange(
+            cx - sx / 2,
+            cx + sx / 2,
+            spacing
+        )
+
+        y = np.arange(
+            cy - sy / 2,
+            cy + sy / 2,
+            spacing
+        )
+
+        z = np.arange(
+            cz,
+            cz + sz,
+            spacing
+        )
 
         points = []
 
-        # Bottom/top surfaces
-        xx, yy = np.meshgrid(x, y)
-
-        points.append(
-            np.column_stack((
-                xx.ravel(),
-                yy.ravel(),
-                np.full(xx.size, cz)
-            ))
+        # Bottom surface
+        xx, yy = np.meshgrid(
+            x,
+            y
         )
 
         points.append(
             np.column_stack((
                 xx.ravel(),
                 yy.ravel(),
-                np.full(xx.size, cz + sz)
+                np.full(
+                    xx.size,
+                    cz
+                )
             ))
         )
 
-        # Side surfaces
-        yy, zz = np.meshgrid(y, z)
+        # Top surface
+        points.append(
+            np.column_stack((
+                xx.ravel(),
+                yy.ravel(),
+                np.full(
+                    xx.size,
+                    cz + sz
+                )
+            ))
+        )
+
+        # Left / right surfaces
+        yy, zz = np.meshgrid(
+            y,
+            z
+        )
 
         points.append(
             np.column_stack((
-                np.full(yy.size, cx - sx / 2),
+                np.full(
+                    yy.size,
+                    cx - sx / 2
+                ),
                 yy.ravel(),
                 zz.ravel()
             ))
@@ -69,18 +136,28 @@ class SyntheticLiDAR:
 
         points.append(
             np.column_stack((
-                np.full(yy.size, cx + sx / 2),
+                np.full(
+                    yy.size,
+                    cx + sx / 2
+                ),
                 yy.ravel(),
                 zz.ravel()
             ))
         )
 
-        xx, zz = np.meshgrid(x, z)
+        # Front / back surfaces
+        xx, zz = np.meshgrid(
+            x,
+            z
+        )
 
         points.append(
             np.column_stack((
                 xx.ravel(),
-                np.full(xx.size, cy - sy / 2),
+                np.full(
+                    xx.size,
+                    cy - sy / 2
+                ),
                 zz.ravel()
             ))
         )
@@ -88,29 +165,75 @@ class SyntheticLiDAR:
         points.append(
             np.column_stack((
                 xx.ravel(),
-                np.full(xx.size, cy + sy / 2),
+                np.full(
+                    xx.size,
+                    cy + sy / 2
+                ),
                 zz.ravel()
             ))
         )
 
         return np.vstack(points)
 
-    def generate_frame(self, vehicle_x=8.0):
-        """Generate one synthetic LiDAR frame."""
+    def generate_frame(
+        self,
+        vehicle_x=8.0
+    ):
+        """
+        Generate one synthetic LiDAR frame.
 
-        ground = self.generate_ground()
+        Returns:
+            points:
+                Nx3 array containing X, Y, Z.
 
-        # Static obstacle / wall
+            labels:
+                N array containing semantic class IDs.
+
+        Semantic classes:
+            0 -> Ground
+            1 -> Static obstacle
+            2 -> Dynamic object
+        """
+
+        # ----------------------------------------
+        # Ground
+        # ----------------------------------------
+
+        ground, ground_labels = self.generate_ground()
+
+        # ----------------------------------------
+        # Static obstacle: wall
+        # ----------------------------------------
+
         wall = self.generate_box(
             center=(12, 4, 1.5),
-            size=(4, 0.5, 3),
+            size=(4, 0.5, 3)
         )
 
-        # Dynamic vehicle
+        wall_labels = np.full(
+            len(wall),
+            self.STATIC_OBSTACLE,
+            dtype=np.int32
+        )
+
+        # ----------------------------------------
+        # Dynamic object: vehicle
+        # ----------------------------------------
+
         vehicle = self.generate_box(
             center=(vehicle_x, -3, 1.0),
-            size=(4, 2, 2),
+            size=(4, 2, 2)
         )
+
+        vehicle_labels = np.full(
+            len(vehicle),
+            self.DYNAMIC_OBJECT,
+            dtype=np.int32
+        )
+
+        # ----------------------------------------
+        # Combine everything
+        # ----------------------------------------
 
         points = np.vstack([
             ground,
@@ -118,17 +241,10 @@ class SyntheticLiDAR:
             vehicle
         ])
 
-        return points
+        labels = np.concatenate([
+            ground_labels,
+            wall_labels,
+            vehicle_labels
+        ])
 
-
-if __name__ == "__main__":
-    lidar = SyntheticLiDAR()
-
-    points = lidar.generate_frame()
-
-    print("Synthetic LiDAR frame generated")
-    print(f"Number of points: {len(points)}")
-    print(f"Point cloud shape: {points.shape}")
-    print()
-    print("First 5 points:")
-    print(points[:5])
+        return points, labels
